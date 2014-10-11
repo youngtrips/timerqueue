@@ -1,7 +1,9 @@
-##timerqueue
+timerqueue
+==========
 
-timer wheel  implement with golang
+Timerwheel is a timer implement with golang, inspired by linux kernel.
 
-###useage
+Useage
+------
 
 go get github.com/youngtrips/timerqueue
