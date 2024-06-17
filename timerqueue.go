@@ -17,6 +17,7 @@ const (
 	MIN_TICK_INTERVAL = 1e6 // nanoseconds, 1ms
 	MAXN_LEVEL        = 5
 	FPS               = 50
+	DEFAULT_FPS       = 50
 )
 
 type timer struct {
@@ -34,14 +35,19 @@ type TimerQueue struct {
 	tvec          [MAXN_LEVEL][]*list.List
 	pendingTimers *list.List
 	mutex         sync.Mutex
+	fps           int64
 }
 
-func New() *TimerQueue {
+func New(fps int) *TimerQueue {
+	if fps <= 0 {
+		fps = DEFAULT_FPS
+	}
 	tq := &TimerQueue{
 		tickTime:      now(),
 		ticks:         0,
 		nextTimerId:   0,
 		pendingTimers: list.New(),
+		fps:           int64(fps),
 	}
 	for i := 0; i < MAXN_LEVEL; i++ {
 		if i == 0 {
@@ -56,6 +62,7 @@ func New() *TimerQueue {
 	return tq
 }
 
+// delay, by milliseconds
 func (tq *TimerQueue) Schedule(delay int64, ch chan int64) int64 {
 	delay = delay * 1e6
 	if delay < MIN_TICK_INTERVAL {
@@ -75,7 +82,7 @@ func (tq *TimerQueue) Schedule(delay int64, ch chan int64) int64 {
 }
 
 func (tq *TimerQueue) Run() {
-	ti := int64(1e9 / FPS)
+	ti := int64(time.Second) / tq.fps
 	go func() {
 		last := now()
 		for {
@@ -91,12 +98,15 @@ func (tq *TimerQueue) Run() {
 }
 
 func (tq *TimerQueue) genID() int64 {
-	tq.nextTimerId++
-	return tq.nextTimerId
+	return atomic.AddInt64(&tq.nextTimerId, 1)
 }
 
 func now() int64 {
 	return time.Now().UnixNano()
+}
+
+func NowMS() int64 {
+	return now() / 1e6
 }
 
 func (tq *TimerQueue) addTimer(t *timer) int64 {
@@ -131,7 +141,7 @@ func (tq *TimerQueue) addTimer(t *timer) int64 {
 	return t.id
 }
 
-func (tq *TimerQueue) cascade(n uint32) uint32 {
+func (tq *TimerQueue) cascade(n uint32) bool {
 	idx := uint32(tq.ticks>>(TVR_BITS+(n-1)*TVN_BITS)) & TVN_MASK
 	vec := tq.tvec[n][idx]
 	tq.tvec[n][idx] = list.New()
@@ -140,7 +150,7 @@ func (tq *TimerQueue) cascade(n uint32) uint32 {
 		t := e.Value.(*timer)
 		tq.addTimer(t)
 	}
-	return idx
+	return idx == 0
 }
 
 func (tq *TimerQueue) tick(dt int64) {
@@ -157,9 +167,7 @@ func (tq *TimerQueue) tick(dt int64) {
 	// tick
 	for ticks := dt / MIN_TICK_INTERVAL; ticks > 0; ticks-- {
 		idx := tq.ticks & TVR_MASK
-		if idx == 0 &&
-			tq.cascade(1) == 0 &&
-			tq.cascade(2) == 0 {
+		if idx == 0 && tq.cascade(1) && tq.cascade(2) {
 			tq.cascade(3)
 		}
 
